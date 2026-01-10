@@ -1,0 +1,14 @@
+# Copyright (c) 2025 Cloudflare, Inc.
+# Licensed under the MIT license found in the LICENSE.txt file or at:
+#     https://opensource.org/license/mit
+
+name = "capnweb-rest-comparison"
+main = "src/worker.ts"
+compatibility_date = "2024-09-01"
+
+[assets]
+directory = "web/dist"
+
+[vars]
+# Optional: Simulate network delay to make timing differences more visible
+SIMULATED_DELAY_MS = "50"
