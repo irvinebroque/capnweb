@@ -89,6 +89,17 @@ Any of the [server runtimes](/servers/workers/) can answer a batch request:
 - Fetch-API runtimes: `newHttpBatchRpcResponse(request, api, options?)`.
 - Node.js: `nodeHttpBatchRpcResponse(request, response, api, options?)`.
 
+Once an HTTP batch session is created, it owns the supplied root object or stub. Both HTTP adapters
+close that session after the requested results have drained and the response body has been captured,
+including when a call fails. Malformed batch input also closes the session. Teardown releases the
+root and any remaining exported capabilities, invoking their disposal handlers when their last
+references are released.
+
+Use a fresh root target for each request. To share a root across requests, keep an owning `RpcStub`
+and pass `stub.dup()` to each handler; batch teardown releases that duplicate while your owning stub
+keeps the root alive. A request rejected before session creation, such as a non-POST request, does
+not transfer ownership. See [Disposal](/concepts/disposal/) for reference ownership and cleanup.
+
 ## Cross-origin
 
 Batch requests are subject to normal CORS rules. If you also accept WebSockets, you might as well
