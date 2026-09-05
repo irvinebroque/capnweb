@@ -217,7 +217,9 @@ warning; a constrained one validates against its constraint.
 
 ## Shared validator graphs
 
-Nested capability interfaces are emitted once per transformed module and validation side, then
+An API can return several objects with the same interface. Emitting a fresh copy of their validation
+rules each time makes the generated bundle larger. Nested capability interfaces are emitted once
+per transformed module and validation side, then
 referenced from every root that uses them. Named value shapes shared within a resolved graph are
 also emitted once. Forward and cyclic capability references use lazy validators; same-named
 services with different signatures remain separate.

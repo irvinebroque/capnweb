@@ -8,7 +8,7 @@
 import ts from "typescript";
 
 import { fileMatchesTransformFilters, type TransformContext } from "./context.js";
-import { emitValidator } from "./emit.js";
+import { ModuleValidators } from "./module-validators.js";
 import {
   collectPlatformMethodNames,
   collectUnsupported,
@@ -17,7 +17,6 @@ import {
   isWorkerEntrypointType,
   resolveServiceShape,
   type ServiceShape,
-  type TypeShape,
   type UnsupportedPosition,
   type UnsupportedTypeIssue,
 } from "./type-introspector.js";
@@ -152,7 +151,7 @@ export function transformModule(
 
   if (callSites.length === 0 && decoratorSites.length === 0) return null;
 
-  let dedup = new ValidatorDedup();
+  let dedup = new ModuleValidators();
   for (let site of callSites) {
     site.bindingName = dedup.bind(site.shape, site.side);
   }
@@ -171,40 +170,7 @@ export function transformModule(
     ? CAPNWEB_RUNTIME_IMPORT
     : CORE_RUNTIME_IMPORT;
   if (needsCoreExtraRuntime) prelude += CORE_RUNTIME_EXTRA_IMPORT;
-  let emitted = dedup.emitOrder();
-  let emittedIndex = new Map(
-    emitted.map((entry, index) => [entry.bindingName, index])
-  );
-  // Nested services resolved from one root share the same named-shape map.
-  // Assign that map one binding namespace and emit it once rather than once
-  // for every service in the capability graph.
-  let namedShapeOwners = new Map<Map<number, TypeShape>, string>();
-  for (let entry of emitted) {
-    if (!namedShapeOwners.has(entry.shape.namedShapes)) {
-      namedShapeOwners.set(entry.shape.namedShapes, entry.bindingName);
-    }
-  }
-  for (let entry of emitted) {
-    prelude += `let ${entry.bindingName};\n`;
-  }
-  for (let entry of emitted) {
-    let mode = entry.side === "client" ? "throw" : serverMode;
-    prelude +=
-      emitValidator(entry.bindingName, entry.shape, mode, entry.side, {
-        assign: true,
-        emitNamedShapes:
-          namedShapeOwners.get(entry.shape.namedShapes) === entry.bindingName,
-        namedShapeBindingName: namedShapeOwners.get(entry.shape.namedShapes),
-        serviceBinding: (shape) => {
-          let name = dedup.lookup(shape, entry.side);
-          if (!name) return undefined;
-          return {
-            name,
-            lazy: emittedIndex.get(name)! >= emittedIndex.get(entry.bindingName)!,
-          };
-        },
-      }) + "\n";
-  }
+  prelude += dedup.emit(serverMode);
   edits.push({ start: 0, end: 0, text: prelude });
 
   for (let cs of callSites) {
@@ -835,194 +801,6 @@ function isTooGeneric(type: ts.Type): boolean {
   let name = type.getSymbol()?.getName();
   if (name === "RpcTarget" || name === "WorkerEntrypoint") return true;
   return false;
-}
-
-class ValidatorDedup {
-  #emitted = new Map<
-    string,
-    { bindingName: string; shape: ServiceShape; signature: string }[]
-  >();
-  #order: {
-    bindingName: string;
-    shape: ServiceShape;
-    side: "server" | "client";
-  }[] = [];
-  #signatures = new WeakMap<ServiceShape, string>();
-
-  signature(shape: ServiceShape): string {
-    let existing = this.#signatures.get(shape);
-    if (existing) return existing;
-    let signature = serviceSignature(shape);
-    this.#signatures.set(shape, signature);
-    return signature;
-  }
-
-  bind(shape: ServiceShape, side: "server" | "client"): string {
-    let key = `${side}:${shape.name}`;
-    let entries = this.#emitted.get(key) ?? [];
-    let signature = this.signature(shape);
-    let existing = entries.find((entry) => entry.signature === signature);
-    if (existing) return existing.bindingName;
-    let suffix = entries.length === 0 ? "" : `_${entries.length + 1}`;
-    let bindingName = `__capnweb_validate_${sanitize(
-      shape.name
-    )}_${side}${suffix}`;
-    let entry = { bindingName, shape, signature };
-    entries.push(entry);
-    this.#emitted.set(key, entries);
-    forEachNestedService(shape, (nested) => this.bind(nested, side));
-    this.#order.push({ bindingName, shape, side });
-    return bindingName;
-  }
-
-  lookup(shape: ServiceShape, side: "server" | "client"): string | undefined {
-    let key = `${side}:${shape.name}`;
-    let signature = this.signature(shape);
-    return this.#emitted
-      .get(key)
-      ?.find((entry) => entry.signature === signature)
-      ?.bindingName;
-  }
-
-  emitOrder(): {
-    bindingName: string;
-    shape: ServiceShape;
-    side: "server" | "client";
-  }[] {
-    return this.#order;
-  }
-}
-
-function forEachNestedService(
-  service: ServiceShape,
-  visit: (service: ServiceShape) => void
-): void {
-  let seenTypes = new Set<TypeShape>();
-  let walk = (shape: TypeShape): void => {
-    if (seenTypes.has(shape)) return;
-    seenTypes.add(shape);
-    switch (shape.kind) {
-      case "array":
-      case "set":
-        walk(shape.element);
-        return;
-      case "map":
-        walk(shape.key);
-        walk(shape.value);
-        return;
-      case "tuple":
-        shape.elements.forEach(walk);
-        if (shape.rest) walk(shape.rest);
-        return;
-      case "object":
-        Object.values(shape.properties).forEach(walk);
-        if (shape.index) walk(shape.index);
-        return;
-      case "union":
-        shape.branches.forEach(walk);
-        return;
-      case "ref": {
-        let referenced = service.namedShapes.get(shape.id);
-        if (referenced) walk(referenced);
-        return;
-      }
-      case "stub":
-        if (shape.service) visit(shape.service);
-        return;
-      default:
-        return;
-    }
-  };
-  for (let method of service.methods) {
-    if (method.skipValidation) continue;
-    method.params.forEach(walk);
-    if (method.rest) walk(method.rest);
-    walk(method.returns);
-  }
-}
-
-function sanitize(name: string): string {
-  return name.replace(/[^A-Za-z0-9_$]/g, "_");
-}
-
-function serviceSignature(shape: ServiceShape): string {
-  return JSON.stringify({
-    targetKind: shape.targetKind ?? null,
-    passthrough: shape.passthrough ?? [],
-    methods: shape.methods.map((method) =>
-      method.skipValidation
-        ? {
-            name: method.name,
-            unchecked: true,
-          }
-        : {
-            name: method.name,
-            params: method.params.map((param) => typeSignature(param)),
-            rest: method.rest ? typeSignature(method.rest) : null,
-            returns: typeSignature(method.returns),
-            // A getter and a same-named no-arg method share params/returns;
-            // isGetter must distinguish them so dedup does not reuse one for the
-            // other (the runtime validates a getter on read, a method on call).
-            isGetter: method.isGetter ?? false,
-          }
-    ),
-  });
-}
-
-function typeSignature(shape: TypeShape): unknown {
-  switch (shape.kind) {
-    case "literal":
-      return [shape.kind, shape.value];
-    case "array":
-      return [shape.kind, typeSignature(shape.element)];
-    case "map":
-      return [shape.kind, typeSignature(shape.key), typeSignature(shape.value)];
-    case "set":
-      return [shape.kind, typeSignature(shape.element)];
-    case "tuple":
-      return [
-        shape.kind,
-        shape.elements.map((element) => typeSignature(element)),
-        shape.minLength ?? null,
-        shape.rest ? typeSignature(shape.rest) : null,
-      ];
-    case "object":
-      return [
-        shape.kind,
-        shape.name,
-        sortedEntries(shape.properties),
-        shape.index ? typeSignature(shape.index) : null,
-      ];
-    case "union":
-      return [
-        shape.kind,
-        shape.branches.map((branch) => typeSignature(branch)),
-      ];
-    case "ref":
-      return [shape.kind, shape.id];
-    case "typedArray":
-      return [shape.kind, shape.name];
-    case "stub":
-      return [
-        shape.kind,
-        shape.service ? serviceSignature(shape.service) : null,
-      ];
-    case "unsupported":
-      return [
-        shape.kind,
-        shape.reason,
-        shape.typeExpr ?? null,
-        shape.fixHint ?? null,
-      ];
-    default:
-      return [shape.kind];
-  }
-}
-
-function sortedEntries(properties: Record<string, TypeShape>): unknown[] {
-  return Object.entries(properties)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => [key, typeSignature(value)]);
 }
 
 function buildError(sf: ts.SourceFile, node: ts.Node, message: string): Error {

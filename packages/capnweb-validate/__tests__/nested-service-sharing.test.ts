@@ -82,6 +82,35 @@ describe("module-wide nested service sharing", () => {
     expect(() => root.number().value("bad" as any)).toThrow(/number/);
   });
 
+  it("keeps same-named services separate when their named value shapes differ", () => {
+    const { code } = transformFixture(`
+      namespace Text {
+        export interface Record { value: string; next?: Record; }
+        export interface Shared extends RpcTarget { accept(input: Record): void; }
+      }
+      namespace Number {
+        export interface Record { value: number; next?: Record; }
+        export interface Shared extends RpcTarget { accept(input: Record): void; }
+      }
+      class First extends RpcTarget {
+        accept(input: Text.Record): void {}
+        shared(): Text.Shared { return null as any; }
+      }
+      class Second extends RpcTarget {
+        accept(input: Number.Record): void {}
+        shared(): Number.Shared { return null as any; }
+      }
+      export const first = newWorkersRpcResponse(null as any, new First());
+      export const second = newWorkersRpcResponse(null as any, new Second());
+    `);
+    for (const [name, valid, invalid] of [["First", "ok", 42], ["Second", 42, "bad"]] as const) {
+      const root = wrapServerTarget({ accept() {}, shared: () => ({ accept() {} }) },
+        loadValidator(code, `__capnweb_validate_${name}_server`));
+      expect(() => root.shared().accept({ value: valid, next: { value: valid } })).not.toThrow();
+      expect(() => root.shared().accept({ value: invalid })).toThrow(/value/);
+    }
+  });
+
   it("keeps server argument checks and client result checks separate", () => {
     const { code } = transformFixture(`
       import { validateStub } from "capnweb-validate";
