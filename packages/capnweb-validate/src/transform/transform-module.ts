@@ -82,6 +82,8 @@ export const MARKERS: Record<
   string,
   {
     side: "server" | "client";
+    runtime: "core" | "capnweb";
+    explicitSurface: boolean;
     helper: string;
     targetArgIndex: number;
     form: "call" | "new";
@@ -89,30 +91,48 @@ export const MARKERS: Record<
 > = {
   newWorkersRpcResponse: {
     side: "server",
+    runtime: "capnweb",
+    explicitSurface: false,
     form: "call",
     helper: "__newWorkersRpcResponseWithValidation",
     targetArgIndex: 1,
   },
   newWorkersWebSocketRpcResponse: {
     side: "server",
+    runtime: "capnweb",
+    explicitSurface: false,
     form: "call",
     helper: "__newWorkersWebSocketRpcResponseWithValidation",
     targetArgIndex: 1,
   },
   newHttpBatchRpcResponse: {
     side: "server",
+    runtime: "capnweb",
+    explicitSurface: false,
     form: "call",
     helper: "__newHttpBatchRpcResponseWithValidation",
     targetArgIndex: 1,
   },
   nodeHttpBatchRpcResponse: {
     side: "server",
+    runtime: "capnweb",
+    explicitSurface: false,
     form: "call",
     helper: "__nodeHttpBatchRpcResponseWithValidation",
     targetArgIndex: 2,
   },
+  validateTarget: {
+    side: "server",
+    runtime: "core",
+    explicitSurface: true,
+    form: "call",
+    helper: "wrapServerTarget",
+    targetArgIndex: 0,
+  },
   validateStub: {
     side: "client",
+    runtime: "core",
+    explicitSurface: true,
     form: "call",
     helper: "__validateStub",
     targetArgIndex: 0,
@@ -163,10 +183,9 @@ export function transformModule(
   let serverMode = context.options.serverValidation ?? "throw";
 
   let edits: TextEdit[] = [];
-  let capnwebCallSites = callSites.filter((site) => site.marker.side === "server");
-  let coreCallSites = callSites.filter((site) => site.marker.side === "client");
-  let needsCapnwebRuntime = capnwebCallSites.length > 0;
-  let needsCoreExtraRuntime = needsCapnwebRuntime && coreCallSites.length > 0;
+  let needsCapnwebRuntime = callSites.some((site) => site.marker.runtime === "capnweb");
+  let needsCoreExtraRuntime = needsCapnwebRuntime &&
+    callSites.some((site) => site.marker.runtime === "core");
   let prelude = needsCapnwebRuntime
     ? CAPNWEB_RUNTIME_IMPORT
     : CORE_RUNTIME_IMPORT;
@@ -180,7 +199,7 @@ export function transformModule(
 
   for (let cs of callSites) {
     let callee = cs.call.expression;
-    let runtimeNamespace = cs.marker.side === "client"
+    let runtimeNamespace = cs.marker.runtime === "core"
       ? needsCapnwebRuntime
         ? CORE_RUNTIME_NAMESPACE
         : RUNTIME_NAMESPACE
@@ -737,7 +756,7 @@ function resolveCallSiteShape(
   checker: ts.TypeChecker
 ): ServiceShape | null {
   let type: ts.Type;
-  if (marker.side === "client") {
+  if (marker.explicitSurface) {
     let explicit = getExplicitTypeArgument(call, checker);
     if (explicit) {
       type = unwrapRpcStub(checker, explicit);
