@@ -212,9 +212,21 @@ export function transformModule(
 
   for (let site of decoratorSites) {
     edits.push({
-      start: site.decorator.expression.getStart(sourceFile),
-      end: site.decorator.expression.getEnd(),
-      text: `${RUNTIME_NAMESPACE}.__validateRpcClass(${site.bindingName!})`,
+      start: site.decorator.getStart(sourceFile),
+      end: site.decorator.getEnd(),
+      text: "",
+    });
+    // These method markers are compile-time-only no-ops. Remove them after
+    // resolving the class surface so downstream tools need no decorator support.
+    for (let marker of [...collectClassSkipRpcValidationMethods(site.cls, checker).values()].flat()) {
+      edits.push({ start: marker.getStart(sourceFile), end: marker.getEnd(), text: "" });
+    }
+    edits.push({
+      start: site.cls.getEnd(),
+      end: site.cls.getEnd(),
+      text:
+        `\n${RUNTIME_NAMESPACE}.` +
+        `__applyRpcClassValidation(${site.classBinding}, ${site.bindingName!});`,
     });
   }
 
@@ -292,6 +304,7 @@ type CallSite = {
 type DecoratorSite = {
   decorator: ts.Decorator;
   cls: ts.ClassDeclaration;
+  classBinding: string;
   shape: ServiceShape;
   bindingName?: string;
 };
@@ -409,25 +422,66 @@ function collectDecoratorSites(
 
   function visit(node: ts.Node): void {
     if (ts.isClassDeclaration(node)) {
-      for (let decorator of ts.getDecorators(node) ?? []) {
-        if (
-          !isValidateRpcDecorator(
-            decorator,
-            decoratorBindings,
-            namespaces,
-            checker
-          )
+      let decorators = ts.getDecorators(node) ?? [];
+      let validationDecorators = decorators.filter((decorator) =>
+        isValidateRpcDecorator(
+          decorator,
+          decoratorBindings,
+          namespaces,
+          checker
         )
-          continue;
+      );
+      if (validationDecorators.length > 0) {
+        assertDirectApplicationClassSupported(
+          sf,
+          node,
+          decorators,
+          validationDecorators
+        );
+      }
+      for (let decorator of validationDecorators) {
         let shape = resolveDecoratorShape(sf, node, decorator, checker);
         rejectUnsupported(sf, decorator, "validateRpc", shape);
-        out.push({ decorator, cls: node, shape });
+        out.push({ decorator, cls: node, classBinding: node.name!.text, shape });
       }
     }
     ts.forEachChild(node, visit);
   }
   visit(sf);
   return out;
+}
+
+function assertDirectApplicationClassSupported(
+  sf: ts.SourceFile,
+  cls: ts.ClassDeclaration,
+  decorators: readonly ts.Decorator[],
+  validationDecorators: readonly ts.Decorator[]
+): void {
+  let site = validationDecorators[0]!;
+  if (!cls.name) {
+    throw buildError(
+      sf,
+      site,
+      "capnweb-validate: @validateRpc requires a named class declaration so " +
+        "the transform can apply validation after its declaration."
+    );
+  }
+  if (validationDecorators.length > 1) {
+    throw buildError(
+      sf,
+      site,
+      "capnweb-validate: a class may have only one @validateRpc marker."
+    );
+  }
+  if (decorators.length !== validationDecorators.length) {
+    throw buildError(
+      sf,
+      site,
+      "capnweb-validate: @validateRpc cannot be composed with another class " +
+        "decorator. Apply unrelated behavior without decorator syntax or " +
+        "move it to a separately exported class."
+    );
+  }
 }
 
 function isValidateRpcDecorator(
@@ -608,15 +662,15 @@ function rejectSkippedMethodsOutsideSurface(
   sf: ts.SourceFile,
   cls: ts.ClassDeclaration,
   shape: ServiceShape,
-  skipped: Map<string, ts.Decorator>
+  skipped: Map<string, ts.Decorator[]>
 ): void {
   let surfaceMethods = new Set(shape.methods.map((method) => method.name));
   let className = cls.name?.text ?? "<anonymous>";
-  for (let [name, decorator] of skipped) {
+  for (let [name, decorators] of skipped) {
     if (surfaceMethods.has(name)) continue;
     throw buildError(
       sf,
-      decorator,
+      decorators[0]!,
       `capnweb-validate: @skipRpcValidation() on ${className}.${name} ` +
         `does not match a method in the resolved RPC surface ${shape.name}. ` +
         `@skipRpcValidation() only applies to methods in the RPC surface.`
@@ -626,7 +680,7 @@ function rejectSkippedMethodsOutsideSurface(
 
 function applySkippedMethods(
   shape: ServiceShape,
-  skipped: Map<string, ts.Decorator>
+  skipped: Map<string, ts.Decorator[]>
 ): ServiceShape {
   return {
     ...shape,
@@ -641,8 +695,8 @@ function applySkippedMethods(
 function collectClassSkipRpcValidationMethods(
   cls: ts.ClassDeclaration,
   checker: ts.TypeChecker
-): Map<string, ts.Decorator> {
-  let skipped = new Map<string, ts.Decorator>();
+): Map<string, ts.Decorator[]> {
+  let skipped = new Map<string, ts.Decorator[]>();
   for (let member of cls.members) {
     if (!ts.isMethodDeclaration(member)) continue;
     let name = methodName(member.name);
@@ -650,8 +704,10 @@ function collectClassSkipRpcValidationMethods(
     for (let decorator of ts.getDecorators(member) ?? []) {
       let expression = decorator.expression;
       if (ts.isCallExpression(expression)) expression = expression.expression;
-      if (!ts.isIdentifier(expression)) continue;
-      let sym = checker.getSymbolAtLocation(expression);
+      if (!ts.isIdentifier(expression) && !ts.isPropertyAccessExpression(expression)) continue;
+      let sym = checker.getSymbolAtLocation(
+        ts.isPropertyAccessExpression(expression) ? expression.name : expression
+      );
       if (sym && sym.flags & ts.SymbolFlags.Alias) {
         sym = checker.getAliasedSymbol(sym);
       }
@@ -659,7 +715,7 @@ function collectClassSkipRpcValidationMethods(
         sym?.getName() === "skipRpcValidation" &&
         isCapnwebValidateSymbol(sym)
       ) {
-        skipped.set(name, decorator);
+        skipped.set(name, [...(skipped.get(name) ?? []), decorator]);
       }
     }
   }

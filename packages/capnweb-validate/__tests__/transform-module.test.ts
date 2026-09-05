@@ -317,7 +317,8 @@ describe("transformModule", () => {
       }
       export default Api;
     `);
-    expect(code).toContain("__cw.__validateRpcClass(");
+    expect(code).toContain("__cw.__applyRpcClassValidation(Api,");
+    expect(code).not.toContain("@validateRpc");
     const greet = checkedMethod(loadValidator(code), "greet");
     expect(greet.args[0]).toBe(v.string);
     expect(greet.returns).toBe(v.string);
