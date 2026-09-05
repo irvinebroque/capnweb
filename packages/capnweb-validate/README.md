@@ -92,6 +92,29 @@ Pass `@validateRpc<Cursor<string>>()` to validate the `Cursor<string>` surface,
 or `@validateRpc<Cursor<any>>()` to silence the warning while keeping `Cursor`
 positions permissive.
 
+## Validate a local target
+
+Use `validateTarget<Surface>(target)` to validate a local root before handing it to a Cap'n Web
+transport that accepts a proxied target. The explicit interface defines the exposed methods and
+getters; returned capabilities receive their own generated wrappers. Calls to undeclared methods
+and invalid incoming arguments are rejected, while private-field access keeps its original receiver.
+
+```ts
+import { newWebSocketRpcSession } from "capnweb";
+import { validateTarget } from "capnweb-validate";
+
+const root = validateTarget<PublicApi>(new Api());
+const session = newWebSocketRpcSession(socket, root);
+```
+
+The marker is exported from both `capnweb-validate` and `capnweb-validate/capnweb`. Without an explicit
+type argument, its surface is inferred from the target. A target whose type cannot be resolved fails
+at build time; an untransformed marker call throws at runtime. The helper reuses the existing
+server-target wrapper and does not add client-side result validation.
+
+Use `@validateRpc()` for native Workers RPC entrypoints: those require a branded target rather than
+a JavaScript proxy. Existing response-constructor markers remain supported.
+
 ## Client Usage
 
 Client-side stub validation is explicit. Wrap a Cap'n Web client stub with

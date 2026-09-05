@@ -1,5 +1,5 @@
 import { RpcPromise, RpcTarget, type RpcCompatible } from "../src/index.js"
-import { validateStub, type ValidatedStub } from "../packages/capnweb-validate/src/index.js"
+import { validateStub, validateTarget, type ValidatedStub } from "../packages/capnweb-validate/src/index.js"
 import { expectAssignable, expectType, type Equal, type Expect } from "./helpers.js"
 
 class Counter extends RpcTarget {
@@ -7,6 +7,19 @@ class Counter extends RpcTarget {
     return by
   }
 }
+
+interface CounterSurface { increment(by: number): number }
+const exactCounter = validateTarget<CounterSurface>(new Counter())
+expectType<CounterSurface>(exactCounter)
+expectType<number>(exactCounter.increment(1))
+// @ts-expect-error the explicit surface controls the returned type
+exactCounter.hidden()
+// @ts-expect-error the implementation must satisfy the explicit interface
+validateTarget<CounterSurface>({ increment: (by: string) => by })
+// @ts-expect-error a local target must be an object
+validateTarget(42)
+const inferredCounter = validateTarget(new Counter())
+expectType<Counter>(inferredCounter)
 
 interface Api {
   getCounter(): Promise<Counter>

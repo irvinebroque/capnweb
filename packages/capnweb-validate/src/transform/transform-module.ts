@@ -111,6 +111,12 @@ export const MARKERS: Record<
     helper: "__nodeHttpBatchRpcResponseWithValidation",
     targetArgIndex: 2,
   },
+  validateTarget: {
+    side: "server",
+    form: "call",
+    helper: "wrapServerTarget",
+    targetArgIndex: 0,
+  },
   validateStub: {
     side: "client",
     form: "call",
@@ -163,8 +169,8 @@ export function transformModule(
   let serverMode = context.options.serverValidation ?? "throw";
 
   let edits: TextEdit[] = [];
-  let capnwebCallSites = callSites.filter((site) => site.marker.side === "server");
-  let coreCallSites = callSites.filter((site) => site.marker.side === "client");
+  let capnwebCallSites = callSites.filter((site) => site.marker.side === "server" && site.marker.helper !== "wrapServerTarget");
+  let coreCallSites = callSites.filter((site) => site.marker.side === "client" || site.marker.helper === "wrapServerTarget");
   let needsCapnwebRuntime = capnwebCallSites.length > 0;
   let needsCoreExtraRuntime = needsCapnwebRuntime && coreCallSites.length > 0;
   let prelude = needsCapnwebRuntime
@@ -180,7 +186,7 @@ export function transformModule(
 
   for (let cs of callSites) {
     let callee = cs.call.expression;
-    let runtimeNamespace = cs.marker.side === "client"
+    let runtimeNamespace = (cs.marker.side === "client" || cs.marker.helper === "wrapServerTarget")
       ? needsCapnwebRuntime
         ? CORE_RUNTIME_NAMESPACE
         : RUNTIME_NAMESPACE
@@ -737,7 +743,7 @@ function resolveCallSiteShape(
   checker: ts.TypeChecker
 ): ServiceShape | null {
   let type: ts.Type;
-  if (marker.side === "client") {
+  if (marker.side === "client" || marker.helper === "wrapServerTarget") {
     let explicit = getExplicitTypeArgument(call, checker);
     if (explicit) {
       type = unwrapRpcStub(checker, explicit);

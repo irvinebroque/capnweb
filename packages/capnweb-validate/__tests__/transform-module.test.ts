@@ -58,6 +58,7 @@ declare module "cloudflare:workers" {
 declare module "capnweb-validate" {
   export function validateRpc(...args: unknown[]): unknown;
   export function validateStub<T>(stub: object): unknown;
+  export function validateTarget<T extends object>(target: T): T;
 }
 declare module "capnweb-validate/capnweb" {
   export function newWorkersRpcResponse(request: Request, target: object): Promise<Response>;
@@ -303,6 +304,24 @@ describe("transformModule", () => {
     expect(code).toContain(`import * as __cvcore from "capnweb-validate/internal/core"`);
     expect(code).toContain(`__cvcore.__validateStub<Api>(newHttpBatchRpcSession<Api>("/rpc"), __capnweb_validate_Api_client)`);
     expect(code).toContain(`__cw.__newWorkersRpcResponseWithValidation(req, new Api(), __capnweb_validate_Api_server)`);
+  });
+
+  it("server: validateTarget uses its explicit surface and the core runtime", () => {
+    let { code } = transform(`
+      import { validateTarget } from "capnweb-validate";
+      import { RpcTarget } from "capnweb";
+      interface Public extends RpcTarget { greet(name: string): string }
+      class Target extends RpcTarget {
+        greet(name: string): string { return name; }
+        hidden(): string { return "hidden"; }
+      }
+      export const target = validateTarget<Public>(new Target());
+    `);
+    expect(code).toContain(`import * as __cw from "capnweb-validate/internal/core"`);
+    expect(code).toContain("__cw.wrapServerTarget<Public>(new Target(), __capnweb_validate_Public_server)");
+    const validator = loadValidator(code, "__capnweb_validate_Public_server");
+    expect(Object.keys(validator.methods)).toEqual(["greet"]);
+    expect(checkedMethod(validator, "greet").args[0]).toBe(v.string);
   });
 
   it("decorator: rewrites @validateRpc to wrap the class", () => {

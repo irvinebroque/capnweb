@@ -40,6 +40,15 @@ export function validateRpc(
   return uncompiledDecoratorMarker(args);
 }
 
+/** Wrap a local target with a concrete, receiver-validated RPC surface. */
+export function validateTarget<TSurface extends object>(target: TSurface): TSurface;
+export function validateTarget(_target: object): never {
+  throw new Error(
+    "capnweb-validate validateTarget() was called before it was transformed. " +
+      "Configure the capnweb-validate bundler plugin or run the capnweb-validate CLI."
+  );
+}
+
 export function validateStub<TSurface>(stub: object): ValidatedStub<TSurface>;
 export function validateStub(_stub: object): never {
   throw new Error(
