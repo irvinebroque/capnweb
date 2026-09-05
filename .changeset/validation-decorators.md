@@ -2,4 +2,4 @@
 "capnweb-validate": minor
 ---
 
-Lower validation class and method markers to ordinary JavaScript. Named class declarations are required; default-exported declarations and other class-decorator composition now fail at build time. Use a named decorated class followed by a separate default export.
+Lower validation class and method markers to ordinary JavaScript, including named default exports. Anonymous classes, repeated validation class markers, and composition with other class decorators now fail at build time. Give anonymous classes a name and apply unrelated class behavior explicitly.

@@ -218,14 +218,14 @@ export function transformModule(
     });
     // These method markers are compile-time-only no-ops. Remove them after
     // resolving the class surface so downstream tools need no decorator support.
-    for (let marker of collectClassSkipRpcValidationMethods(site.cls, checker).values()) {
+    for (let marker of [...collectClassSkipRpcValidationMethods(site.cls, checker).values()].flat()) {
       edits.push({ start: marker.getStart(sourceFile), end: marker.getEnd(), text: "" });
     }
     edits.push({
       start: site.cls.getEnd(),
       end: site.cls.getEnd(),
       text:
-        `\n${site.classBinding} = ${RUNTIME_NAMESPACE}.` +
+        `\n${RUNTIME_NAMESPACE}.` +
         `__applyRpcClassValidation(${site.classBinding}, ${site.bindingName!});`,
     });
   }
@@ -458,24 +458,12 @@ function assertDirectApplicationClassSupported(
   validationDecorators: readonly ts.Decorator[]
 ): void {
   let site = validationDecorators[0]!;
-  if (!cls.name || !ts.isIdentifier(cls.name)) {
+  if (!cls.name) {
     throw buildError(
       sf,
       site,
       "capnweb-validate: @validateRpc requires a named class declaration so " +
-        "the transform can update its live binding."
-    );
-  }
-  if (
-    cls.modifiers?.some(
-      (modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword
-    )
-  ) {
-    throw buildError(
-      sf,
-      site,
-      "capnweb-validate: @validateRpc does not support a default-exported " +
-        "class declaration. Export the named validated class separately."
+        "the transform can apply validation after its declaration."
     );
   }
   if (validationDecorators.length > 1) {
@@ -674,15 +662,15 @@ function rejectSkippedMethodsOutsideSurface(
   sf: ts.SourceFile,
   cls: ts.ClassDeclaration,
   shape: ServiceShape,
-  skipped: Map<string, ts.Decorator>
+  skipped: Map<string, ts.Decorator[]>
 ): void {
   let surfaceMethods = new Set(shape.methods.map((method) => method.name));
   let className = cls.name?.text ?? "<anonymous>";
-  for (let [name, decorator] of skipped) {
+  for (let [name, decorators] of skipped) {
     if (surfaceMethods.has(name)) continue;
     throw buildError(
       sf,
-      decorator,
+      decorators[0]!,
       `capnweb-validate: @skipRpcValidation() on ${className}.${name} ` +
         `does not match a method in the resolved RPC surface ${shape.name}. ` +
         `@skipRpcValidation() only applies to methods in the RPC surface.`
@@ -692,7 +680,7 @@ function rejectSkippedMethodsOutsideSurface(
 
 function applySkippedMethods(
   shape: ServiceShape,
-  skipped: Map<string, ts.Decorator>
+  skipped: Map<string, ts.Decorator[]>
 ): ServiceShape {
   return {
     ...shape,
@@ -707,8 +695,8 @@ function applySkippedMethods(
 function collectClassSkipRpcValidationMethods(
   cls: ts.ClassDeclaration,
   checker: ts.TypeChecker
-): Map<string, ts.Decorator> {
-  let skipped = new Map<string, ts.Decorator>();
+): Map<string, ts.Decorator[]> {
+  let skipped = new Map<string, ts.Decorator[]>();
   for (let member of cls.members) {
     if (!ts.isMethodDeclaration(member)) continue;
     let name = methodName(member.name);
@@ -727,7 +715,7 @@ function collectClassSkipRpcValidationMethods(
         sym?.getName() === "skipRpcValidation" &&
         isCapnwebValidateSymbol(sym)
       ) {
-        skipped.set(name, decorator);
+        skipped.set(name, [...(skipped.get(name) ?? []), decorator]);
       }
     }
   }

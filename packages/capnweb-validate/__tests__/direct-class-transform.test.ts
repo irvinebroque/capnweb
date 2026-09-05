@@ -65,6 +65,7 @@ describe("direct class validation lowering", () => {
     ["@validateRpc()", "@skipRpcValidation()"],
     ["@vr()", "@skip()"],
     ["@cv.validateRpc()", "@cv.skipRpcValidation"],
+    ["@validateRpc()", "@skipRpcValidation() @skipRpcValidation()"],
   ])("removes owned class and method markers (%s)", (classMarker, methodMarker) => {
     const { code } = transformFixture(`
       import { validateRpc as vr, skipRpcValidation as skip } from "capnweb-validate";
@@ -82,9 +83,25 @@ describe("direct class validation lowering", () => {
     expect(() => new Api().checked(42)).toThrow(/string/);
   });
 
+  it("supports a named default-exported class without replacing its constructor", () => {
+    const { code } = transformFixture(`
+      @validateRpc()
+      export default class Api extends RpcTarget {
+        #prefix = "hello";
+        greet(name: string): string { return this.#prefix + ":" + name; }
+      }
+      export const original = Api;
+    `, options);
+    expect(code).not.toContain("Api = __cw");
+    const output = evaluate(code);
+    expect(output.default).toBe(output.original);
+    expect(new output.default().greet("world")).toBe("hello:world");
+    expect(() => new output.default().greet(42)).toThrow(/string/);
+  });
+
   it.each([
     ["@validateRpc() export default class extends RpcTarget {}", /named class/],
-    ["@validateRpc() export default class Api extends RpcTarget {}", /default-exported/],
+
     ["@validateRpc() @validateRpc() class Api extends RpcTarget {}", /only one/],
     ["declare const other: any; @other @validateRpc() class Api extends RpcTarget {}", /composed/],
   ])("rejects ambiguous class lowering: %s", (source, message) => {

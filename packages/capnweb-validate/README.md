@@ -67,12 +67,11 @@ The generated validation code uses ordinary JavaScript calls. Class identity, st
 private fields, live exports, and inheritance remain intact. Unrelated method decorators still
 require support from the downstream compiler.
 
-This lowering accepts one validation marker on a named class declaration. Anonymous classes,
-default-exported class declarations, repeated class markers, and composition with other class
-decorators produce build errors. Before adopting it, change `@validateRpc() export default class Api`
-to a named decorated declaration followed by `export default Api;`. Give anonymous classes a name,
-remove repeated validation markers, and move other class-decorator behavior to explicit application
-code or a separate class. The internal decorator helper remains available for older transformed code.
+This lowering accepts one validation marker on a named class declaration, including a named
+`export default class Api`. Anonymous classes, repeated class markers, and composition with other
+class decorators produce build errors. Give anonymous classes a name, remove repeated validation
+markers, and move other class-decorator behavior to explicit application code or a separate class.
+The internal decorator helper remains available for older transformed code.
 
 ## Generic service classes
 
