@@ -215,6 +215,16 @@ per-`new`-expression. Use an explicit surface such as `@validateRpc<Cursor<strin
 arguments are known at the decorator site. An unconstrained type parameter defaults to `any` with a
 warning; a constrained one validates against its constraint.
 
+## Shared validator graphs
+
+Nested capability interfaces are emitted once per transformed module and validation side, then
+referenced from every root that uses them. Named value shapes shared within a resolved graph are
+also emitted once. Forward and cyclic capability references use lazy validators; same-named
+services with different signatures remain separate.
+
+This reduces generated code without changing method exposure, server argument validation, client
+result validation, warning mode, or error paths. No source migration is required.
+
 ## Schema evolution
 
 A validator built from one version of your types will eventually meet a peer built from another.

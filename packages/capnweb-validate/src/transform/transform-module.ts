@@ -171,10 +171,39 @@ export function transformModule(
     ? CAPNWEB_RUNTIME_IMPORT
     : CORE_RUNTIME_IMPORT;
   if (needsCoreExtraRuntime) prelude += CORE_RUNTIME_EXTRA_IMPORT;
-  for (let entry of dedup.emitOrder()) {
+  let emitted = dedup.emitOrder();
+  let emittedIndex = new Map(
+    emitted.map((entry, index) => [entry.bindingName, index])
+  );
+  // Nested services resolved from one root share the same named-shape map.
+  // Assign that map one binding namespace and emit it once rather than once
+  // for every service in the capability graph.
+  let namedShapeOwners = new Map<Map<number, TypeShape>, string>();
+  for (let entry of emitted) {
+    if (!namedShapeOwners.has(entry.shape.namedShapes)) {
+      namedShapeOwners.set(entry.shape.namedShapes, entry.bindingName);
+    }
+  }
+  for (let entry of emitted) {
+    prelude += `let ${entry.bindingName};\n`;
+  }
+  for (let entry of emitted) {
     let mode = entry.side === "client" ? "throw" : serverMode;
     prelude +=
-      emitValidator(entry.bindingName, entry.shape, mode, entry.side) + "\n";
+      emitValidator(entry.bindingName, entry.shape, mode, entry.side, {
+        assign: true,
+        emitNamedShapes:
+          namedShapeOwners.get(entry.shape.namedShapes) === entry.bindingName,
+        namedShapeBindingName: namedShapeOwners.get(entry.shape.namedShapes),
+        serviceBinding: (shape) => {
+          let name = dedup.lookup(shape, entry.side);
+          if (!name) return undefined;
+          return {
+            name,
+            lazy: emittedIndex.get(name)! >= emittedIndex.get(entry.bindingName)!,
+          };
+        },
+      }) + "\n";
   }
   edits.push({ start: 0, end: 0, text: prelude });
 
@@ -818,11 +847,20 @@ class ValidatorDedup {
     shape: ServiceShape;
     side: "server" | "client";
   }[] = [];
+  #signatures = new WeakMap<ServiceShape, string>();
+
+  signature(shape: ServiceShape): string {
+    let existing = this.#signatures.get(shape);
+    if (existing) return existing;
+    let signature = serviceSignature(shape);
+    this.#signatures.set(shape, signature);
+    return signature;
+  }
 
   bind(shape: ServiceShape, side: "server" | "client"): string {
     let key = `${side}:${shape.name}`;
     let entries = this.#emitted.get(key) ?? [];
-    let signature = serviceSignature(shape);
+    let signature = this.signature(shape);
     let existing = entries.find((entry) => entry.signature === signature);
     if (existing) return existing.bindingName;
     let suffix = entries.length === 0 ? "" : `_${entries.length + 1}`;
@@ -832,8 +870,18 @@ class ValidatorDedup {
     let entry = { bindingName, shape, signature };
     entries.push(entry);
     this.#emitted.set(key, entries);
+    forEachNestedService(shape, (nested) => this.bind(nested, side));
     this.#order.push({ bindingName, shape, side });
     return bindingName;
+  }
+
+  lookup(shape: ServiceShape, side: "server" | "client"): string | undefined {
+    let key = `${side}:${shape.name}`;
+    let signature = this.signature(shape);
+    return this.#emitted
+      .get(key)
+      ?.find((entry) => entry.signature === signature)
+      ?.bindingName;
   }
 
   emitOrder(): {
@@ -842,6 +890,54 @@ class ValidatorDedup {
     side: "server" | "client";
   }[] {
     return this.#order;
+  }
+}
+
+function forEachNestedService(
+  service: ServiceShape,
+  visit: (service: ServiceShape) => void
+): void {
+  let seenTypes = new Set<TypeShape>();
+  let walk = (shape: TypeShape): void => {
+    if (seenTypes.has(shape)) return;
+    seenTypes.add(shape);
+    switch (shape.kind) {
+      case "array":
+      case "set":
+        walk(shape.element);
+        return;
+      case "map":
+        walk(shape.key);
+        walk(shape.value);
+        return;
+      case "tuple":
+        shape.elements.forEach(walk);
+        if (shape.rest) walk(shape.rest);
+        return;
+      case "object":
+        Object.values(shape.properties).forEach(walk);
+        if (shape.index) walk(shape.index);
+        return;
+      case "union":
+        shape.branches.forEach(walk);
+        return;
+      case "ref": {
+        let referenced = service.namedShapes.get(shape.id);
+        if (referenced) walk(referenced);
+        return;
+      }
+      case "stub":
+        if (shape.service) visit(shape.service);
+        return;
+      default:
+        return;
+    }
+  };
+  for (let method of service.methods) {
+    if (method.skipValidation) continue;
+    method.params.forEach(walk);
+    if (method.rest) walk(method.rest);
+    walk(method.returns);
   }
 }
 

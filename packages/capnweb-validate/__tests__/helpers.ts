@@ -215,7 +215,9 @@ export function loadValidator(
     throw new Error("validator runtime import not found in:\n" + code);
   }
 
-  const start = runtimeImport.length;
+  let start = runtimeImport.length;
+  const extraRuntimeImport = `import * as __cvcore from "capnweb-validate/internal/core";\n`;
+  if (code.startsWith(extraRuntimeImport, start)) start += extraRuntimeImport.length;
   let end = code.length;
   for (let lineStart = start; lineStart < code.length; ) {
     let lineEnd = code.indexOf("\n", lineStart);
