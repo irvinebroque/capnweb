@@ -8,21 +8,28 @@
 // Wrangler at via a `predev` / `prebuild` script.
 
 import { realpathSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ValidationMode } from "./internal/core.js";
 import { runBuild } from "./transform/run.js";
+import { inspectProgram } from "./transform/inspect-program.js";
 
 function usage(exitCode: number = 1): never {
   let out = exitCode === 0 ? console.log : console.error;
   out(`Usage:
   capnweb-validate build --out <dir> [options]
+  capnweb-validate inspect-program --graph-out <file> [options]
 
 Options:
   --out <dir>                 Directory to write transformed sources to. Required.
   --tsconfig <path>           Path to tsconfig.json. Defaults to ./tsconfig.json.
   --cwd <dir>                 Working directory. Defaults to process.cwd().
   --server-validation <mode>  How server-side checks behave: throw | warn. Default throw.
+  --graph-out <file>           Write deterministic program-graph JSON.
+  --memory-out <file>          Write environment-labelled memory JSON (requires --expose-gc).
+  --runner-label <label>       Label the memory observation runner.
   -h, --help                  Show this message.`);
   process.exit(exitCode);
 }
@@ -32,6 +39,15 @@ type BuildArgs = {
   tsconfig?: string;
   cwd?: string;
   serverValidation?: ValidationMode;
+};
+
+type InspectArgs = {
+  serverValidation?: ValidationMode;
+  graphOut?: string;
+  memoryOut?: string;
+  runnerLabel?: string;
+  tsconfig?: string;
+  cwd?: string;
 };
 
 function parseMode(arg: string, value: string | undefined): ValidationMode {
@@ -63,13 +79,60 @@ function parseBuildArgs(args: string[]): BuildArgs {
   return parsed;
 }
 
+function parseInspectArgs(args: string[]): InspectArgs {
+  let parsed: InspectArgs = {};
+  for (let i = 0; i < args.length; i++) {
+    let arg = args[i];
+    if (arg === "--help" || arg === "-h") usage(0);
+    if (arg === "--server-validation") {
+      parsed.serverValidation = parseMode(arg, args[++i]);
+    } else if (["--graph-out", "--memory-out", "--runner-label", "--tsconfig", "--cwd"].includes(arg)) {
+      let value = args[++i];
+      if (value === undefined) throw new Error(`${arg} requires a value.`);
+      let key = arg.slice(2).replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+      (parsed as Record<string, string>)[key] = value;
+    } else if (arg.startsWith("--")) {
+      throw new Error(`Unknown option: ${arg}`);
+    } else {
+      throw new Error(`Unexpected argument: ${arg}`);
+    }
+  }
+  return parsed;
+}
+
 async function main(): Promise<void> {
   let [command, ...rest] = process.argv.slice(2);
   if (command === undefined || command === "--help" || command === "-h") {
     usage(command === undefined ? 1 : 0);
   }
-  if (command !== "build") {
+  if (command !== "build" && command !== "inspect-program") {
     throw new Error(`Unknown command: ${command}. Run with --help for usage.`);
+  }
+  if (command === "inspect-program") {
+    let opts = parseInspectArgs(rest);
+    if (!opts.graphOut) throw new Error("Missing --graph-out <file>.");
+    let cwd = resolve(opts.cwd ?? process.cwd());
+    let result = await inspectProgram({
+      cwd,
+      tsconfig: opts.tsconfig,
+      memory: Boolean(opts.memoryOut),
+      runnerLabel: opts.runnerLabel,
+      serverValidation: opts.serverValidation,
+    });
+    let graphOut = resolve(cwd, opts.graphOut);
+    await mkdir(dirname(graphOut), { recursive: true });
+    await writeFile(graphOut, `${JSON.stringify(result.graph, null, 2)}\n`);
+    if (opts.memoryOut && result.memory) {
+      let memoryOut = resolve(cwd, opts.memoryOut);
+      await mkdir(dirname(memoryOut), { recursive: true });
+      await writeFile(memoryOut, `${JSON.stringify(result.memory, null, 2)}\n`);
+    }
+    console.log(
+      `capnweb-validate: inspected ${result.graph.rootFileCount} roots, ` +
+      `${result.graph.sourceFileCount} source files, ` +
+      `${result.graph.markerFiles.length} marker files -> ${opts.graphOut}`
+    );
+    return;
   }
   let opts = parseBuildArgs(rest);
   if (!opts.out) {

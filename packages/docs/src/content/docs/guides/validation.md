@@ -157,6 +157,37 @@ capnweb-validate build --out .capnweb-validate
 
 Point the downstream build tool at the generated entry under `--out`.
 
+## Inspect the compiler program
+
+Run the optional inspection command to see exactly which files the validation compiler loads:
+
+```sh
+npx capnweb-validate inspect-program --tsconfig tsconfig.json --graph-out reports/program.json
+```
+
+The JSON reports sorted root files, all compiler source files (including imported declarations),
+and the files actually transformed. Paths are relative to `--cwd`, which also resolves the config
+and report paths. Compiler and package versions are included. Marker detection uses the real
+transform, so aliases, namespace imports, and shadowed identifiers follow the build's behavior.
+Inspection constructs the program and runs transforms in memory; it writes no transformed sources.
+
+For memory observations, run the CLI with Node's explicit garbage collection enabled:
+
+```sh
+node --expose-gc node_modules/capnweb-validate/dist/cli.cjs inspect-program \
+  --graph-out reports/program.json --memory-out reports/memory.json --runner-label local
+```
+
+The separate memory report records heap, RSS, external and array-buffer bytes after program/checker
+construction, marker transforms, and context disposal. Process high-water measurements, Node/OS/CPU
+architecture, elapsed construction time, and a SHA-256 of the graph JSON identify the observation.
+Compare memory only under comparable environments; the graph is deterministic for an unchanged
+program and toolchain, while memory and timing are observations rather than reproducibility claims.
+
+`--server-validation throw|warn` selects the same server policy as a build. Ordinary builds remain
+unchanged and emit no inspection reports. Inspection exposes file lists without assigning
+application-specific categories to them.
+
 ## Opting out per method
 
 `@skipRpcValidation()` exempts one method from an otherwise validated class:
