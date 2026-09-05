@@ -1322,22 +1322,28 @@ export function __validateStub<T>(
   return wrapClientStub(stub, validator) as ValidatedStub<T>;
 }
 
-export function __validateRpcClass<T extends new (...args: any[]) => object>(
-  validator: ServiceValidator
-): (value: T, context?: unknown) => T {
+export function __applyRpcClassValidation<
+  T extends abstract new (...args: any[]) => object
+>(value: T, validator: ServiceValidator): T {
+  // Wrap the declared methods in place on the class's prototype instead of
+  // returning a Proxy from the constructor: workerd's native RPC serializes
+  // branded RpcTargets, not Proxies; `#` fields, `instanceof`, and identity
+  // keep working; and validated-extends-validated composes through ordinary
+  // prototype inheritance (subclass-only methods wrapped by the subclass
+  // validator, inherited methods by the base's). Undeclared members are left
+  // untouched; the RPC layers refuse instance properties themselves.
+  wrapPrototypeMethods(
+    (value as unknown as { prototype: object }).prototype,
+    validator
+  );
+  return value;
+}
+
+export function __validateRpcClass<
+  T extends abstract new (...args: any[]) => object
+>(validator: ServiceValidator): (value: T, context?: unknown) => T {
   return function validateRpcClass(value: T, _context?: unknown): T {
-    // Wrap the declared methods in place on the class's prototype instead of
-    // returning a Proxy from the constructor: workerd's native RPC serializes
-    // branded RpcTargets, not Proxies; `#` fields, `instanceof`, and identity
-    // keep working; and decorated-extends-decorated composes through ordinary
-    // prototype inheritance (subclass-only methods wrapped by the subclass
-    // validator, inherited methods by the base's). Undeclared members are
-    // left untouched; the RPC layers refuse instance properties themselves.
-    wrapPrototypeMethods(
-      (value as unknown as { prototype: object }).prototype,
-      validator
-    );
-    return value;
+    return __applyRpcClassValidation(value, validator);
   };
 }
 

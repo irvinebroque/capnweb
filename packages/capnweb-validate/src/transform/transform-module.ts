@@ -212,9 +212,21 @@ export function transformModule(
 
   for (let site of decoratorSites) {
     edits.push({
-      start: site.decorator.expression.getStart(sourceFile),
-      end: site.decorator.expression.getEnd(),
-      text: `${RUNTIME_NAMESPACE}.__validateRpcClass(${site.bindingName!})`,
+      start: site.decorator.getStart(sourceFile),
+      end: site.decorator.getEnd(),
+      text: "",
+    });
+    // These method markers are compile-time-only no-ops. Remove them after
+    // resolving the class surface so downstream tools need no decorator support.
+    for (let marker of collectClassSkipRpcValidationMethods(site.cls, checker).values()) {
+      edits.push({ start: marker.getStart(sourceFile), end: marker.getEnd(), text: "" });
+    }
+    edits.push({
+      start: site.cls.getEnd(),
+      end: site.cls.getEnd(),
+      text:
+        `\n${site.classBinding} = ${RUNTIME_NAMESPACE}.` +
+        `__applyRpcClassValidation(${site.classBinding}, ${site.bindingName!});`,
     });
   }
 
@@ -292,6 +304,7 @@ type CallSite = {
 type DecoratorSite = {
   decorator: ts.Decorator;
   cls: ts.ClassDeclaration;
+  classBinding: string;
   shape: ServiceShape;
   bindingName?: string;
 };
@@ -409,25 +422,78 @@ function collectDecoratorSites(
 
   function visit(node: ts.Node): void {
     if (ts.isClassDeclaration(node)) {
-      for (let decorator of ts.getDecorators(node) ?? []) {
-        if (
-          !isValidateRpcDecorator(
-            decorator,
-            decoratorBindings,
-            namespaces,
-            checker
-          )
+      let decorators = ts.getDecorators(node) ?? [];
+      let validationDecorators = decorators.filter((decorator) =>
+        isValidateRpcDecorator(
+          decorator,
+          decoratorBindings,
+          namespaces,
+          checker
         )
-          continue;
+      );
+      if (validationDecorators.length > 0) {
+        assertDirectApplicationClassSupported(
+          sf,
+          node,
+          decorators,
+          validationDecorators
+        );
+      }
+      for (let decorator of validationDecorators) {
         let shape = resolveDecoratorShape(sf, node, decorator, checker);
         rejectUnsupported(sf, decorator, "validateRpc", shape);
-        out.push({ decorator, cls: node, shape });
+        out.push({ decorator, cls: node, classBinding: node.name!.text, shape });
       }
     }
     ts.forEachChild(node, visit);
   }
   visit(sf);
   return out;
+}
+
+function assertDirectApplicationClassSupported(
+  sf: ts.SourceFile,
+  cls: ts.ClassDeclaration,
+  decorators: readonly ts.Decorator[],
+  validationDecorators: readonly ts.Decorator[]
+): void {
+  let site = validationDecorators[0]!;
+  if (!cls.name || !ts.isIdentifier(cls.name)) {
+    throw buildError(
+      sf,
+      site,
+      "capnweb-validate: @validateRpc requires a named class declaration so " +
+        "the transform can update its live binding."
+    );
+  }
+  if (
+    cls.modifiers?.some(
+      (modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword
+    )
+  ) {
+    throw buildError(
+      sf,
+      site,
+      "capnweb-validate: @validateRpc does not support a default-exported " +
+        "class declaration. Export the named validated class separately."
+    );
+  }
+  if (validationDecorators.length > 1) {
+    throw buildError(
+      sf,
+      site,
+      "capnweb-validate: a class may have only one @validateRpc marker."
+    );
+  }
+  if (decorators.length !== validationDecorators.length) {
+    throw buildError(
+      sf,
+      site,
+      "capnweb-validate: @validateRpc cannot be composed with another class " +
+        "decorator. Apply unrelated behavior without decorator syntax or " +
+        "move it to a separately exported class."
+    );
+  }
 }
 
 function isValidateRpcDecorator(
@@ -650,8 +716,10 @@ function collectClassSkipRpcValidationMethods(
     for (let decorator of ts.getDecorators(member) ?? []) {
       let expression = decorator.expression;
       if (ts.isCallExpression(expression)) expression = expression.expression;
-      if (!ts.isIdentifier(expression)) continue;
-      let sym = checker.getSymbolAtLocation(expression);
+      if (!ts.isIdentifier(expression) && !ts.isPropertyAccessExpression(expression)) continue;
+      let sym = checker.getSymbolAtLocation(
+        ts.isPropertyAccessExpression(expression) ? expression.name : expression
+      );
       if (sym && sym.flags & ts.SymbolFlags.Alias) {
         sym = checker.getAliasedSymbol(sym);
       }

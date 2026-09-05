@@ -104,6 +104,21 @@ private or symbol-named.
 An explicit `@validateRpc<SomeInterface>()` makes `SomeInterface` the RPC surface. Public class
 methods outside that interface are rejected over RPC.
 
+## Class marker lowering and migration
+
+The transform removes `@validateRpc()` and applies validation to the named class immediately after
+its declaration. It also removes recognized `@skipRpcValidation` method markers after reading them.
+The generated validation code uses ordinary JavaScript calls. Class identity, static initialization,
+private fields, live exports, and inheritance remain intact. Unrelated method decorators still
+require support from the downstream compiler.
+
+This lowering accepts one validation marker on a named class declaration. Anonymous classes,
+default-exported class declarations, repeated class markers, and composition with other class
+decorators produce build errors. Before adopting it, change `@validateRpc() export default class Api`
+to a named decorated declaration followed by `export default Api;`. Give anonymous classes a name,
+remove repeated validation markers, and move other class-decorator behavior to explicit application
+code or a separate class. The internal decorator helper remains available for older transformed code.
+
 ## Client usage
 
 Client-side stub validation is explicit. Wrap a client stub with `validateStub<T>()` when the caller

@@ -12,6 +12,7 @@ import {
   type ServiceValidator,
 } from "./core.js";
 export {
+  __applyRpcClassValidation,
   __validateRpcClass,
   v,
   type MethodSpec,
