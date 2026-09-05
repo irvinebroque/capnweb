@@ -8,7 +8,7 @@
 import ts from "typescript";
 
 import { fileMatchesTransformFilters, type TransformContext } from "./context.js";
-import { emitValidator } from "./emit.js";
+import { ModuleValidators } from "./module-validators.js";
 import {
   collectPlatformMethodNames,
   collectUnsupported,
@@ -17,7 +17,6 @@ import {
   isWorkerEntrypointType,
   resolveServiceShape,
   type ServiceShape,
-  type TypeShape,
   type UnsupportedPosition,
   type UnsupportedTypeIssue,
 } from "./type-introspector.js";
@@ -152,7 +151,7 @@ export function transformModule(
 
   if (callSites.length === 0 && decoratorSites.length === 0) return null;
 
-  let dedup = new ValidatorDedup();
+  let dedup = new ModuleValidators();
   for (let site of callSites) {
     site.bindingName = dedup.bind(site.shape, site.side);
   }
@@ -171,11 +170,7 @@ export function transformModule(
     ? CAPNWEB_RUNTIME_IMPORT
     : CORE_RUNTIME_IMPORT;
   if (needsCoreExtraRuntime) prelude += CORE_RUNTIME_EXTRA_IMPORT;
-  for (let entry of dedup.emitOrder()) {
-    let mode = entry.side === "client" ? "throw" : serverMode;
-    prelude +=
-      emitValidator(entry.bindingName, entry.shape, mode, entry.side) + "\n";
-  }
+  prelude += dedup.emit(serverMode);
   edits.push({ start: 0, end: 0, text: prelude });
 
   for (let cs of callSites) {
@@ -806,127 +801,6 @@ function isTooGeneric(type: ts.Type): boolean {
   let name = type.getSymbol()?.getName();
   if (name === "RpcTarget" || name === "WorkerEntrypoint") return true;
   return false;
-}
-
-class ValidatorDedup {
-  #emitted = new Map<
-    string,
-    { bindingName: string; shape: ServiceShape; signature: string }[]
-  >();
-  #order: {
-    bindingName: string;
-    shape: ServiceShape;
-    side: "server" | "client";
-  }[] = [];
-
-  bind(shape: ServiceShape, side: "server" | "client"): string {
-    let key = `${side}:${shape.name}`;
-    let entries = this.#emitted.get(key) ?? [];
-    let signature = serviceSignature(shape);
-    let existing = entries.find((entry) => entry.signature === signature);
-    if (existing) return existing.bindingName;
-    let suffix = entries.length === 0 ? "" : `_${entries.length + 1}`;
-    let bindingName = `__capnweb_validate_${sanitize(
-      shape.name
-    )}_${side}${suffix}`;
-    let entry = { bindingName, shape, signature };
-    entries.push(entry);
-    this.#emitted.set(key, entries);
-    this.#order.push({ bindingName, shape, side });
-    return bindingName;
-  }
-
-  emitOrder(): {
-    bindingName: string;
-    shape: ServiceShape;
-    side: "server" | "client";
-  }[] {
-    return this.#order;
-  }
-}
-
-function sanitize(name: string): string {
-  return name.replace(/[^A-Za-z0-9_$]/g, "_");
-}
-
-function serviceSignature(shape: ServiceShape): string {
-  return JSON.stringify({
-    targetKind: shape.targetKind ?? null,
-    passthrough: shape.passthrough ?? [],
-    methods: shape.methods.map((method) =>
-      method.skipValidation
-        ? {
-            name: method.name,
-            unchecked: true,
-          }
-        : {
-            name: method.name,
-            params: method.params.map((param) => typeSignature(param)),
-            rest: method.rest ? typeSignature(method.rest) : null,
-            returns: typeSignature(method.returns),
-            // A getter and a same-named no-arg method share params/returns;
-            // isGetter must distinguish them so dedup does not reuse one for the
-            // other (the runtime validates a getter on read, a method on call).
-            isGetter: method.isGetter ?? false,
-          }
-    ),
-  });
-}
-
-function typeSignature(shape: TypeShape): unknown {
-  switch (shape.kind) {
-    case "literal":
-      return [shape.kind, shape.value];
-    case "array":
-      return [shape.kind, typeSignature(shape.element)];
-    case "map":
-      return [shape.kind, typeSignature(shape.key), typeSignature(shape.value)];
-    case "set":
-      return [shape.kind, typeSignature(shape.element)];
-    case "tuple":
-      return [
-        shape.kind,
-        shape.elements.map((element) => typeSignature(element)),
-        shape.minLength ?? null,
-        shape.rest ? typeSignature(shape.rest) : null,
-      ];
-    case "object":
-      return [
-        shape.kind,
-        shape.name,
-        sortedEntries(shape.properties),
-        shape.index ? typeSignature(shape.index) : null,
-      ];
-    case "union":
-      return [
-        shape.kind,
-        shape.branches.map((branch) => typeSignature(branch)),
-      ];
-    case "ref":
-      return [shape.kind, shape.id];
-    case "typedArray":
-      return [shape.kind, shape.name];
-    case "stub":
-      return [
-        shape.kind,
-        shape.service ? serviceSignature(shape.service) : null,
-      ];
-    case "unsupported":
-      return [
-        shape.kind,
-        shape.reason,
-        shape.typeExpr ?? null,
-        shape.fixHint ?? null,
-      ];
-    default:
-      return [shape.kind];
-  }
-}
-
-function sortedEntries(properties: Record<string, TypeShape>): unknown[] {
-  return Object.entries(properties)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, value]) => [key, typeSignature(value)]);
 }
 
 function buildError(sf: ts.SourceFile, node: ts.Node, message: string): Error {

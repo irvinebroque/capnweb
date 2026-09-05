@@ -19,27 +19,38 @@ export function emitValidator(
   bindingName: string,
   shape: ServiceShape,
   mode: ValidationMode = "throw",
-  side: EmitSide = "server"
+  side: EmitSide = "server",
+  options: {
+    assign?: boolean;
+    emitNamedShapes?: boolean;
+    namedShapeBindingName?: string;
+    serviceBinding?: (
+      shape: ServiceShape
+    ) => { name: string; lazy: boolean } | undefined;
+  } = {}
 ): string {
   let lines: string[] = [];
   let ctx: EmitContext = {
-    bindingName,
+    bindingName: options.namedShapeBindingName ?? bindingName,
     namedShapes: shape.namedShapes,
     definingId: undefined,
     mode,
     side,
+    serviceBinding: options.serviceBinding,
   };
-  for (let id of shape.namedShapes.keys()) {
-    lines.push(`let ${shapeBinding(bindingName, id)};`);
-  }
-  for (let [id, namedShape] of shape.namedShapes) {
-    ctx.definingId = id;
-    lines.push(
-      `${shapeBinding(bindingName, id)} = ${emitValidator_(namedShape, ctx)};`
-    );
+  if (options.emitNamedShapes !== false) {
+    for (let id of shape.namedShapes.keys()) {
+      lines.push(`let ${shapeBinding(ctx.bindingName, id)};`);
+    }
+    for (let [id, namedShape] of shape.namedShapes) {
+      ctx.definingId = id;
+      lines.push(
+        `${shapeBinding(ctx.bindingName, id)} = ${emitValidator_(namedShape, ctx)};`
+      );
+    }
   }
   ctx.definingId = undefined;
-  lines.push(`const ${bindingName} = {`);
+  lines.push(`${options.assign ? `${bindingName} =` : `const ${bindingName} =`} {`);
   for (let part of serviceMetaParts(shape, mode)) lines.push(`  ${part},`);
   lines.push(`  methods: {`);
   for (let method of shape.methods) {
@@ -58,6 +69,9 @@ type EmitContext = {
   definingId: number | undefined;
   mode: ValidationMode;
   side: EmitSide;
+  serviceBinding?: (
+    shape: ServiceShape
+  ) => { name: string; lazy: boolean } | undefined;
 };
 
 function shapeBinding(bindingName: string, id: number): string {
@@ -229,9 +243,16 @@ function emitValidator_(shape: TypeShape, ctx: EmitContext): string {
     case "function":
       return `__cw.v.func`;
     case "stub":
-      return shape.service
-        ? `__cw.v.stubOf(${emitServiceLiteral(shape.service, ctx)})`
-        : `__cw.v.stub`;
+      if (!shape.service) return `__cw.v.stub`;
+      // Share every distinct nested RPC surface once per transformed module.
+      // Lazy references cover forward and recursive capability graphs without
+      // weakening the generated argument or return validators.
+      let serviceBinding = ctx.serviceBinding?.(shape.service);
+      return serviceBinding
+        ? serviceBinding.lazy
+          ? `__cw.v.lazy(() => __cw.v.stubOf(${serviceBinding.name}))`
+          : `__cw.v.stubOf(${serviceBinding.name})`
+        : `__cw.v.stubOf(${emitServiceLiteral(shape.service, ctx)})`;
     case "unsupported":
       // Normally rejected before here; this fallback covers unrepresentable corners and keeps the lowerer total.
       return `__cw.v.any`;
