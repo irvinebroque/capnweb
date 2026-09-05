@@ -81,16 +81,24 @@ function parseBuildArgs(args: string[]): BuildArgs {
 
 function parseInspectArgs(args: string[]): InspectArgs {
   let parsed: InspectArgs = {};
+  const stringOptions = {
+    "--graph-out": "graphOut",
+    "--memory-out": "memoryOut",
+    "--runner-label": "runnerLabel",
+    "--tsconfig": "tsconfig",
+    "--cwd": "cwd",
+  } as const;
   for (let i = 0; i < args.length; i++) {
-    let arg = args[i];
+    let arg = args[i]!;
     if (arg === "--help" || arg === "-h") usage(0);
     if (arg === "--server-validation") {
       parsed.serverValidation = parseMode(arg, args[++i]);
-    } else if (["--graph-out", "--memory-out", "--runner-label", "--tsconfig", "--cwd"].includes(arg)) {
+    } else if (Object.hasOwn(stringOptions, arg)) {
       let value = args[++i];
-      if (value === undefined) throw new Error(`${arg} requires a value.`);
-      let key = arg.slice(2).replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
-      (parsed as Record<string, string>)[key] = value;
+      if (value === undefined || value.startsWith("--")) {
+        throw new Error(`${arg} requires a value.`);
+      }
+      parsed[stringOptions[arg as keyof typeof stringOptions]] = value;
     } else if (arg.startsWith("--")) {
       throw new Error(`Unknown option: ${arg}`);
     } else {
@@ -112,6 +120,11 @@ async function main(): Promise<void> {
     let opts = parseInspectArgs(rest);
     if (!opts.graphOut) throw new Error("Missing --graph-out <file>.");
     let cwd = resolve(opts.cwd ?? process.cwd());
+    let graphOut = resolve(cwd, opts.graphOut);
+    let memoryOut = opts.memoryOut ? resolve(cwd, opts.memoryOut) : undefined;
+    if (graphOut === memoryOut) {
+      throw new Error("--graph-out and --memory-out must be different files.");
+    }
     let result = await inspectProgram({
       cwd,
       tsconfig: opts.tsconfig,
@@ -119,11 +132,9 @@ async function main(): Promise<void> {
       runnerLabel: opts.runnerLabel,
       serverValidation: opts.serverValidation,
     });
-    let graphOut = resolve(cwd, opts.graphOut);
     await mkdir(dirname(graphOut), { recursive: true });
     await writeFile(graphOut, `${JSON.stringify(result.graph, null, 2)}\n`);
-    if (opts.memoryOut && result.memory) {
-      let memoryOut = resolve(cwd, opts.memoryOut);
+    if (memoryOut && result.memory) {
       await mkdir(dirname(memoryOut), { recursive: true });
       await writeFile(memoryOut, `${JSON.stringify(result.memory, null, 2)}\n`);
     }

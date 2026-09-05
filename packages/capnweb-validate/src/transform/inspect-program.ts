@@ -78,7 +78,7 @@ export async function inspectProgram(options: TransformContextOptions & {
     elapsedProgramConstructionMs = performance.now() - constructionStarted;
     afterProgramAndChecker = options.memory ? measureMemory() : undefined;
 
-    let rootFiles = context.getRootFileNames().map((file) => stablePath(file, cwd)).sort();
+    let rootFiles = context.getProgram().getRootFileNames().map((file) => stablePath(file, cwd)).sort();
     let sourceFiles = context.getProgram().getSourceFiles()
       .map((file) => stablePath(file.fileName, cwd)).sort();
     let markerFiles: string[] = [];
@@ -91,7 +91,7 @@ export async function inspectProgram(options: TransformContextOptions & {
     markerFiles.sort();
     graph = {
       schemaVersion: 1,
-      tsconfig: stablePath(context.getTsconfigPath(), cwd),
+      tsconfig: stablePath(context.getProgram().getCompilerOptions().configFilePath as string, cwd),
       compilerVersion: ts.version,
       transformPackageVersion: packageJson.version,
       rootFileCount: rootFiles.length,

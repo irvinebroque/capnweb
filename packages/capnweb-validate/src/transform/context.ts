@@ -106,10 +106,6 @@ export function fileMatchesTransformFilters(
 
 export interface TransformContext {
   readonly options: TransformContextOptions;
-  /** Resolved config path used to construct the shared TypeScript program. */
-  getTsconfigPath(): string;
-  /** Parsed root files before imported dependencies expand the program. */
-  getRootFileNames(): readonly string[];
   /** Absolute paths of every `.ts`/`.tsx` file the build should consider. */
   listSourceFiles(): Iterable<string>;
   /** The shared TypeScript checker. Lazily built on first call. */
@@ -130,7 +126,6 @@ export function createTransformContext(
   let publicOptions: TransformContextOptions = { ...options, cwd };
   let program: ts.Program | null = null;
   let checker: ts.TypeChecker | null = null;
-  let resolvedTsconfigPath: string | null = null;
 
   function ensureProgram(): ts.Program {
     if (program) return program;
@@ -149,7 +144,6 @@ export function createTransformContext(
         `with a tsconfig.`,
       );
     }
-    resolvedTsconfigPath = tsconfigPath;
 
     let parsed = readParsedConfig(tsconfigPath);
     let host = ts.createCompilerHost(parsed.options, /* setParentNodes */ true);
@@ -189,15 +183,6 @@ export function createTransformContext(
 
   return {
     options: publicOptions,
-
-    getTsconfigPath(): string {
-      ensureProgram();
-      return resolvedTsconfigPath!;
-    },
-
-    getRootFileNames(): readonly string[] {
-      return ensureProgram().getRootFileNames();
-    },
 
     listSourceFiles(): Iterable<string> {
       let prog = ensureProgram();

@@ -109,8 +109,6 @@ function createVirtualContext(
 
   return {
     options: contextOptions,
-    getTsconfigPath() { return `${VIRTUAL_ROOT}/tsconfig.json`; },
-    getRootFileNames() { return program.getRootFileNames(); },
     listSourceFiles() {
       return program
         .getSourceFiles()

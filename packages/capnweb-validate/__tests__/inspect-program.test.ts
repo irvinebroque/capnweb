@@ -64,6 +64,7 @@ describe("program inspection", () => {
     const second = await inspectProgram({ cwd });
     expect(second).toEqual(first);
     expect(first.memory).toBeUndefined();
+    expect(first.graph.tsconfig).toBe("tsconfig.json");
     expect(first.graph.rootFileCount).toBe(5);
     expect(first.graph.rootFiles).not.toContain("src/types.ts");
     expect(first.graph.sourceFiles).toContain("src/types.ts");
@@ -119,12 +120,23 @@ describe("program inspection", () => {
   it.each([
     [[], "Missing --graph-out"],
     [["--graph-out"], "requires a value"],
+    [["--graph-out", "--memory-out", "memory.json"], "requires a value"],
     [["--unknown"], "Unknown option"],
     [["--graph-out", "graph.json", "--server-validation", "invalid"], "throw, warn"],
   ])("rejects invalid CLI arguments %j", (args, message) => {
     const result = cli(["inspect-program", ...args]);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(message);
+  });
+
+  it("rejects colliding report paths before overwriting an existing report", () => {
+    write("report.json", "keep this report");
+    const result = cli([
+      "inspect-program", "--graph-out", "report.json", "--memory-out", "./report.json",
+    ], true);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("must be different files");
+    expect(readFileSync(join(cwd, "report.json"), "utf8")).toBe("keep this report");
   });
 
   it("keeps inspection opt-in for ordinary builds", () => {

@@ -165,7 +165,8 @@ Point the downstream build tool at the generated entry under `--out`.
 
 ## Inspect the compiler program
 
-Run the optional inspection command to see exactly which files the validation compiler loads:
+TypeScript loads imported files and declarations beyond the files listed in your config. When a
+validation build uses more memory than expected, inspect what it actually loads:
 
 ```sh
 npx capnweb-validate inspect-program --tsconfig tsconfig.json --graph-out reports/program.json
@@ -187,8 +188,9 @@ node --expose-gc node_modules/capnweb-validate/dist/cli.cjs inspect-program \
 The separate memory report records heap, RSS, external and array-buffer bytes after program/checker
 construction, marker transforms, and context disposal. Process high-water measurements, Node/OS/CPU
 architecture, elapsed construction time, and a SHA-256 of the graph JSON identify the observation.
-Compare memory only under comparable environments; the graph is deterministic for an unchanged
-program and toolchain, while memory and timing are observations rather than reproducibility claims.
+Compare memory only under comparable environments. The graph is deterministic for the same file
+lists, marker locations, and toolchain; its hash identifies that report, not source-file contents.
+Memory and timing vary between runs. Graph and memory output paths must be different.
 
 `--server-validation throw|warn` selects the same server policy as a build. Ordinary builds remain
 unchanged and emit no inspection reports. Inspection exposes file lists without assigning
