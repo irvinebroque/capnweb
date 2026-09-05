@@ -138,6 +138,8 @@ class BatchServerTransport implements RpcTransport {
  *
  * @param request The request received from the client initiating the session.
  * @param localMain The main stub or RpcTarget which the server wishes to expose to the client.
+ *     Once the session is created, it takes ownership and disposes this reference when the batch
+ *     finishes or fails. Pass a duplicated stub to keep an independently owned reference alive.
  * @param options Optional RPC session options.
  * @returns The HTTP response to return to the client. Note that the returned object has mutable
  *     headers, so you can modify them using e.g. `response.headers.set("Foo", "bar")`.
@@ -161,12 +163,14 @@ export async function newHttpBatchRpcResponse(
   //   app's responsibility to not wait on any server -> client calls since they will never
   //   complete.
 
-  await transport.whenAllReceived();
-  await rpc.drain();
-
-  // TODO: Ask RpcSession to dispose everything it is still holding on to?
-
-  return new Response(transport.getResponseBody());
+  try {
+    await transport.whenAllReceived();
+    await rpc.drain();
+    // Snapshot the complete batch before closing its one-shot session.
+    return new Response(transport.getResponseBody());
+  } finally {
+    rpc.getRemoteMain()[Symbol.dispose]();
+  }
 }
 
 /**
@@ -175,6 +179,8 @@ export async function newHttpBatchRpcResponse(
  * @param request The request received from the client initiating the session.
  * @param response The response object, to which the response should be written.
  * @param localMain The main stub or RpcTarget which the server wishes to expose to the client.
+ *     Once the session is created, it takes ownership and disposes this reference when the batch
+ *     finishes or fails. Pass a duplicated stub to keep an independently owned reference alive.
  * @param options Optional RPC session options. You can also pass headers to set on the response.
  */
 export async function nodeHttpBatchRpcResponse(
@@ -204,9 +210,12 @@ export async function nodeHttpBatchRpcResponse(
   let transport = new BatchServerTransport(batch);
   let rpc = new RpcSession(transport, localMain, options);
 
-  await transport.whenAllReceived();
-  await rpc.drain();
-
-  response.writeHead(200, options?.headers);
-  response.end(transport.getResponseBody());
+  try {
+    await transport.whenAllReceived();
+    await rpc.drain();
+    response.writeHead(200, options?.headers);
+    response.end(transport.getResponseBody());
+  } finally {
+    rpc.getRemoteMain()[Symbol.dispose]();
+  }
 }
